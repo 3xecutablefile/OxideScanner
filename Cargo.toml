@@ -1,0 +1,43 @@
+[package]
+name = "oxidescanner"
+version = "1.0.1"
+edition = "2021"
+authors = ["3xecutablefile"]
+description = "Enterprise network security scanner with intelligent exploit discovery - Fixed searchsploit integration with smart query filtering"
+license = "MIT"
+keywords = ["security", "scanner", "network", "exploit", "port-scanner"]
+categories = ["command-line-utilities", "network-programming"]
+repository = "https://github.com/NotSmartMan/OxideScanner"
+homepage = "https://github.com/NotSmartMan/OxideScanner"
+documentation = "https://docs.rs/oxidescanner"
+readme = "README.md"
+
+[dependencies]
+
+colored = "2.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+roxmltree = "0.19"
+regex = "1.10"
+once_cell = "1.19"
+thiserror = "1.0"
+lazy_static = "1.4"
+async-trait = "0.1"
+tokio = { version = "1.0", features = ["process", "time", "macros", "rt-multi-thread", "signal", "net"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
+governor = "0.6"
+dashmap = "5.5"
+metrics = "0.22"
+metrics-exporter-prometheus = "0.13"
+chrono = { version = "0.4", features = ["serde"] }
+rand = "0.8"
+atty = "0.2"
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[[bin]]
+name = "oxscan"
+path = "src/main.rs"
