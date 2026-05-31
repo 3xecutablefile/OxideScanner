@@ -34,6 +34,7 @@ metrics-exporter-prometheus = "0.13"
 chrono = { version = "0.4", features = ["serde"] }
 rand = "0.8"
 atty = "0.2"
+inquire = "0.7"
 
 [dev-dependencies]
 tokio-test = "0.4"

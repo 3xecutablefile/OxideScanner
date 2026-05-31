@@ -1,4 +1,5 @@
 pub mod nmap;
+pub mod nmap_nse;
 pub mod searchsploit;
 
 use crate::error::{OxideScannerError, Result};
@@ -13,7 +14,7 @@ pub trait ExternalTool {
     fn name(&self) -> &str;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BaseTool {
     pub name: &'static str,
     pub binary_path: String,

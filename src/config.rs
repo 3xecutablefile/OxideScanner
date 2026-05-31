@@ -5,16 +5,34 @@ use crate::metrics::MetricsConfig;
 use crate::rate_limit::RateLimitPolicy;
 use crate::retry::RetryConfig;
 use crate::validation;
-use colored::Colorize;
+use inquire::{Confirm, Select, Text};
 use serde::{Deserialize, Serialize};
-use std::io::{self, Write};
+use std::io::IsTerminal;
 
 use std::time::Duration;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ScanMode {
+    Tcp,
+    Udp,
+    Both,
+}
+
+impl ScanMode {
+    pub fn label(&self) -> &str {
+        match self {
+            Self::Tcp => "TCP",
+            Self::Udp => "UDP",
+            Self::Both => "TCP + UDP",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub target: String,
     pub json_mode: bool,
+    pub scan_mode: ScanMode,
     pub port_limit: u16,
     pub scan_timeout: Duration,
     pub exploit_timeout: Duration,
@@ -27,6 +45,7 @@ pub struct Config {
     pub logging: LogConfig,
     pub metrics: MetricsConfig,
     pub retry: RetryConfig,
+    pub nse_script: Option<String>,
 }
 
 impl Config {
@@ -36,8 +55,19 @@ impl Config {
         }
 
         let target = validation::validate_target(&args[1])?;
-
         let json_mode = args.contains(&"--json".to_string());
+        let has_any_flags = args.len() > 2;
+        let interactive = std::io::stdin().is_terminal() && !json_mode;
+
+        let scan_mode = if args.contains(&"--udp".to_string()) {
+            ScanMode::Udp
+        } else if args.contains(&"--both".to_string()) {
+            ScanMode::Both
+        } else if !has_any_flags && interactive {
+            Self::prompt_scan_mode()?
+        } else {
+            ScanMode::Tcp
+        };
 
         let port_limit = if args
             .iter()
@@ -46,8 +76,10 @@ impl Config {
             Self::parse_port_limit_flag(args)?
         } else if let Some(limit) = Self::parse_numeric_port_flag(args)? {
             limit
-        } else {
+        } else if interactive {
             Self::prompt_port_limit()?
+        } else {
+            constants::ports::DEFAULT_LIMIT
         };
 
         let scan_timeout =
@@ -57,6 +89,14 @@ impl Config {
             "--exploit-timeout",
             constants::DEFAULT_EXPLOIT_TIMEOUT_SECS * 1000,
         )?;
+
+        let nse_script = if let Some(script) = Self::parse_string_arg(args, "--script") {
+            Some(script)
+        } else if !has_any_flags && interactive {
+            Self::prompt_nse_script()?
+        } else {
+            None
+        };
 
         let env_config = Self::from_env()?;
 
@@ -76,6 +116,7 @@ impl Config {
         Ok(Config {
             target,
             json_mode,
+            scan_mode,
             port_limit,
             scan_timeout,
             exploit_timeout,
@@ -88,7 +129,66 @@ impl Config {
             logging,
             metrics,
             retry,
+            nse_script,
         })
+    }
+
+    fn prompt_scan_mode() -> Result<ScanMode> {
+        let options = vec!["TCP", "UDP", "TCP + UDP"];
+        let selection = Select::new("Select scan mode", options)
+            .with_starting_cursor(0)
+            .prompt()
+            .map_err(|e| OxideScannerError::config(format!("Scan mode prompt failed: {}", e)))?;
+        match selection {
+            "UDP" => Ok(ScanMode::Udp),
+            "TCP + UDP" => Ok(ScanMode::Both),
+            _ => Ok(ScanMode::Tcp),
+        }
+    }
+
+    fn prompt_nse_script() -> Result<Option<String>> {
+        let yes = Confirm::new("Run NSE scripts?")
+            .with_default(false)
+            .prompt()
+            .map_err(|e| OxideScannerError::config(format!("NSE prompt failed: {}", e)))?;
+        if !yes {
+            return Ok(None);
+        }
+
+        let categories = vec![
+            "vuln        Check for specific known vulnerabilities",
+            "safe        Not designed to crash services or exploit holes",
+            "default     Default set (-sC) — speed, usefulness, reliability",
+            "discovery   Query registries, SNMP, directory services, etc.",
+            "exploit     Actively exploit a vulnerability",
+            "auth        Authentication credentials (or bypassing them)",
+            "brute       Brute-force to guess authentication credentials",
+            "intrusive   May crash target, use significant resources",
+            "dos         May cause a denial of service",
+            "broadcast   Discover hosts by broadcasting on local network",
+            "external    May send data to third-party services",
+            "fuzzer      Send unexpected/randomized fields in packets",
+            "malware     Test if target is infected by malware/backdoors",
+            "info        General information gathering",
+            "version     Version detection extension (auto, not selectable)",
+            "Custom      Type your own",
+        ];
+
+        let selection = Select::new("Select NSE script category", categories)
+            .with_starting_cursor(0)
+            .prompt()
+            .map_err(|e| OxideScannerError::config(format!("NSE prompt failed: {}", e)))?;
+
+        if selection == "Custom      (Type your own)" {
+            let custom = Text::new("Enter NSE category/filter:")
+                .with_help_message("Examples: http-*, ssh-auth-methods, or a custom glob")
+                .prompt()
+                .map_err(|e| OxideScannerError::config(format!("NSE prompt failed: {}", e)))?;
+            Ok(Some(custom))
+        } else {
+            let cat = selection.split_whitespace().next().unwrap_or("vuln").to_string();
+            Ok(Some(cat))
+        }
     }
 
     fn parse_timeout_arg(args: &[String], flag: &str, default_ms: u64) -> Result<Duration> {
@@ -178,32 +278,56 @@ impl Config {
     }
 
     fn prompt_port_limit() -> Result<u16> {
-        print!(
-            "{} Enter number of ports to scan (1-65535, or 'all' for full scan): ",
-            "→".bright_cyan()
-        );
+        let port_options = vec!["1000 (top ports)", "5000", "10000", "65535 (all)", "Custom"];
+        let selection = Select::new("Number of ports to scan", port_options)
+            .with_starting_cursor(0)
+            .prompt()
+            .map_err(|e| OxideScannerError::config(format!("Port prompt failed: {}", e)))?;
 
-        if let Err(e) = io::stdout().flush() {
-            return Err(OxideScannerError::Io(e));
+        match selection {
+            "1000 (top ports)" => Ok(1000),
+            "5000" => Ok(5000),
+            "10000" => Ok(10000),
+            "65535 (all)" => Ok(constants::ports::MAX),
+            _ => {
+                let input = Text::new("Enter port count or range (e.g. 2300 or 1-2300):")
+                    .prompt()
+                    .map_err(|e| OxideScannerError::config(format!("Port input failed: {}", e)))?;
+
+                let input = input.trim().to_lowercase();
+                if input == "all" {
+                    Ok(constants::ports::MAX)
+                } else if let Ok(num) = input.parse::<u16>() {
+                    validation::validate_port_limit(num)
+                } else if let Some(num_str) = input.strip_prefix("1-").or_else(|| input.strip_prefix("0-")) {
+                    if let Ok(num) = num_str.parse::<u16>() {
+                        validation::validate_port_limit(num)
+                    } else {
+                        Err(OxideScannerError::config(format!(
+                            "Invalid port range: {}. Use a number like 2300", input
+                        )))
+                    }
+                } else {
+                    Err(OxideScannerError::config(format!(
+                        "Invalid port number: {}. Use e.g. 2300 or 1-2300", input
+                    )))
+                }
+            }
         }
+    }
 
-        let mut input = String::new();
-        if let Err(e) = io::stdin().read_line(&mut input) {
-            return Err(OxideScannerError::Io(e));
+    fn parse_string_arg(args: &[String], flag: &str) -> Option<String> {
+        for (i, arg) in args.iter().enumerate() {
+            if arg == flag {
+                if i + 1 < args.len() {
+                    let val = args[i + 1].trim().to_string();
+                    if !val.is_empty() && !val.starts_with('-') {
+                        return Some(val);
+                    }
+                }
+            }
         }
-
-        let input = input.trim().to_lowercase();
-
-        if input == "all" {
-            Ok(constants::ports::MAX)
-        } else if let Ok(num) = input.parse::<u16>() {
-            validation::validate_port_limit(num)
-        } else {
-            Err(OxideScannerError::config(format!(
-                "Invalid port number: {}",
-                input
-            )))
-        }
+        None
     }
 
     fn parse_thread_arg(args: &[String], default: usize) -> Result<usize> {
@@ -288,6 +412,7 @@ impl Config {
         Ok(Config {
             target: String::new(),
             json_mode: false,
+            scan_mode: ScanMode::Tcp,
             port_limit: 1000,
             scan_timeout: Duration::from_millis(constants::DEFAULT_SCAN_TIMEOUT_MS),
             exploit_timeout: Duration::from_secs(constants::DEFAULT_EXPLOIT_TIMEOUT_SECS),
@@ -300,6 +425,7 @@ impl Config {
             logging,
             metrics,
             retry,
+            nse_script: None,
         })
     }
 }
@@ -343,7 +469,7 @@ mod tests {
 
     #[test]
     fn test_config_invalid_target() {
-        let args = vec!["oxidescanner".to_string(), "invalid..hostname".to_string()];
+        let args = vec!["oxidescanner".to_string(), String::new()];
 
         let result = Config::from_args(&args);
         assert!(result.is_err());

@@ -21,6 +21,7 @@ cd OxideScanner
 
 ### Basic Usage
 
+Run without flags for interactive arrow-key prompts.
 
 Common options
 
@@ -29,9 +30,13 @@ Common options
 | `-Nk` | Scan N×1000 ports | `-1k` = 1000, `-5k` = 5000 |
 | `-N` | Scan N ports | `-1000` = exactly 1000 ports |
 | `--ports N` | Scan port count | `--ports 1000` |
+| `--udp` | UDP scan mode | `--udp` |
+| `--both` | TCP + UDP scan | `--both` |
+| `--script CAT` | NSE script category | `--script vuln` |
 | `--json` | JSON output | `--json` |
 | `--threads N` | Worker threads | `--threads 8` |
-| `--scan-timeout MS` | TCP timeout | `--scan-timeout 50` |
+| `--scan-timeout MS` | Connection timeout | `--scan-timeout 50` |
+| `--exploit-timeout MS` | Exploit search timeout | `--exploit-timeout 5000` |
 
 Command Syntax
 ```bash
@@ -78,22 +83,29 @@ oxscan scanme.nmap.org
 ```
 ### Output:
 ```
-================================================================
-Port 80 | http Apache httpd 2.4.7 | Risk: 136.5 | 17 exploits
-----------------------------------------------------------------
-   [9.8] Apache + PHP Remote Code Execution
-    Path: php/remote/29290.c
+  scanme.nmap.org  scanning top 1000 ports
 
-   [8.1] Apache Memory Information Leak
-    Path: linux/web-apps/42745.py
+  2 open tcp ports  1 filtered port  997 closed
+
+  open
+    22/tcp
+    80/tcp
+
+  filtered
+    25/tcp
+
+  svc
+    22/tcp  ssh OpenSSH 6.6.1p1 Ubuntu 2ubuntu2.13
+    80/tcp  http Apache httpd 2.4.7
+
+  os
+    Linux, Ubuntu  (85%)
+
+  ◆ critical  80/tcp  http Apache httpd 2.4.7  17 exploits
+    1. Apache + PHP < 5.3.12 / < 5.4.2 - cgi-bin Remote Code Execution 
+       /opt/homebrew/opt/exploitdb/share/exploitdb/exploits/php/remote/29290.c
     ...
-    15 more exploits available
-================================================================
-
-Summary:
-  Total exploits: 17
-  High-risk services: 1
-  Services analyzed: 1
+    17 exploits total
 ```
 
 ## Architecture
@@ -101,15 +113,26 @@ Summary:
 
 ### Core Components
 
-- **scanner** - High-performance parallel port scanning
+- **scanner** - High-performance parallel port scanning (TCP + UDP)
 - **exploit** - Exploit database integration and risk scoring
-- **external** - Nmap and searchsploit tool abstractions
+- **external** - Nmap, NSE, and searchsploit tool abstractions
+- **config** - CLI args + interactive prompts with arrow-key selection
+- **validation** - Input validation and sanitization
 - **utils** - Networking utilities and target resolution
 
 
 
 
 ## Changelog
+
+### v1.0.2 (2026-05-31)
+- Added UDP scan mode (`--udp`, `--both`)
+- Added NSE script execution (`--script CATEGORY`)
+- Interactive arrow-key prompts via inquire (no flags needed)
+- Per-port concurrent service detection (one nmap per port, async)
+- Automatic OS detection (banner inference + nmap -O fallback)
+- Auto-lookup NSE categories in interactive menu
+- Port range input support (e.g. `1-2300`)
 
 ### v1.0.1 (2025-11-11)
 - Fixed searchsploit JSON parsing with correct field mappings

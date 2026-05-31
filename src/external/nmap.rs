@@ -15,8 +15,16 @@ pub struct NmapService {
     pub version: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct NmapOsResult {
+    pub name: String,
+    pub accuracy: u8,
+    pub osclass: Option<String>,
+}
+
+#[derive(Clone)]
 pub struct NmapDetector {
-    base_tool: BaseTool,
+    pub base_tool: BaseTool,
 }
 
 impl NmapDetector {
@@ -30,6 +38,7 @@ impl NmapDetector {
         target: &str,
         ports: &[u16],
         timeout: Option<Duration>,
+        is_udp: bool,
     ) -> Result<Vec<NmapService>> {
         let timeout = timeout.unwrap_or(Duration::from_secs(constants::NMAP_TIMEOUT_SECS));
 
@@ -37,7 +46,7 @@ impl NmapDetector {
         let port_list = self.format_port_list(ports)?;
         let validated_port_list = validation::validate_port_list(&port_list)?;
 
-        let args = self.build_nmap_args(&validated_target, &validated_port_list);
+        let args = self.build_nmap_args(&validated_target, &validated_port_list, is_udp);
         let args_str: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
         let output = self.execute_with_timeout(&args_str, timeout).await?;
@@ -55,20 +64,27 @@ impl NmapDetector {
         Ok(port_strings.join(","))
     }
 
-    fn build_nmap_args(&self, target: &str, port_list: &str) -> Vec<String> {
-        vec![
-            "-sV".to_string(),
-            "--version-intensity".to_string(),
-            constants::NMAP_VERSION_INTENSITY.to_string(),
-            "-p".to_string(),
-            port_list.to_string(),
-            "-oX".to_string(),
-            "-".to_string(),
-            "--open".to_string(),
-            "--disable-arp-ping".to_string(),
-            "-Pn".to_string(),
-            target.to_string(),
-        ]
+    fn build_nmap_args(&self, target: &str, port_list: &str, is_udp: bool) -> Vec<String> {
+        let mut args = Vec::new();
+
+        if is_udp {
+            args.push("-sUV".to_string());
+        } else {
+            args.push("-sV".to_string());
+        }
+
+        args.push("--version-intensity".to_string());
+        args.push(constants::NMAP_VERSION_INTENSITY.to_string());
+        args.push("-p".to_string());
+        args.push(port_list.to_string());
+        args.push("-oX".to_string());
+        args.push("-".to_string());
+        args.push("--open".to_string());
+        args.push("--disable-arp-ping".to_string());
+        args.push("-Pn".to_string());
+        args.push(target.to_string());
+
+        args
     }
 
     fn parse_nmap_output(&self, output: &Output) -> Result<Vec<NmapService>> {
@@ -172,6 +188,47 @@ impl NmapDetector {
             version,
         }))
     }
+
+    pub fn parse_os_xml(&self, xml_content: &str) -> Option<NmapOsResult> {
+        let xml_clean: String = xml_content
+            .lines()
+            .filter(|line| !line.trim().starts_with("<!DOCTYPE"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let doc = Document::parse(&xml_clean).ok()?;
+        let root = doc.root_element();
+
+        for host in root.children() {
+            if host.tag_name().name() != "host" {
+                continue;
+            }
+            for osmatch in host.children() {
+                if osmatch.tag_name().name() != "osmatch" {
+                    continue;
+                }
+                let name = osmatch.attribute("name")?.to_string();
+                let accuracy: u8 = osmatch.attribute("accuracy")?.parse().ok()?;
+
+                let osclass = osmatch
+                    .children()
+                    .find(|c| c.tag_name().name() == "osclass")
+                    .and_then(|oc| {
+                        let vendor = oc.attribute("vendor")?;
+                        let family = oc.attribute("osfamily")?;
+                        let gen = oc.attribute("osgen").unwrap_or("");
+                        Some(format!("{} {} {}", vendor, family, gen).trim().to_string())
+                    });
+
+                return Some(NmapOsResult {
+                    name,
+                    accuracy,
+                    osclass,
+                });
+            }
+        }
+        None
+    }
 }
 
 impl ExternalTool for NmapDetector {
@@ -202,5 +259,21 @@ mod tests {
         let ports = vec![];
         let result = detector.format_port_list(&ports);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_build_nmap_args_tcp() {
+        let detector = NmapDetector::new().unwrap();
+        let args = detector.build_nmap_args("127.0.0.1", "80,443", false);
+        assert!(args.contains(&"-sV".to_string()));
+        assert!(!args.contains(&"-sUV".to_string()));
+    }
+
+    #[test]
+    fn test_build_nmap_args_udp() {
+        let detector = NmapDetector::new().unwrap();
+        let args = detector.build_nmap_args("127.0.0.1", "53,161", true);
+        assert!(args.contains(&"-sUV".to_string()));
+        assert!(!args.contains(&"-sV".to_string()));
     }
 }
