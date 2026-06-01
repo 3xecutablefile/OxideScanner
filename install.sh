@@ -122,19 +122,27 @@ if cmd_exists oxscan; then
     chmod +x "$EXISTING"
     print_success "Updated oxscan at $EXISTING"
 else
-    # Fresh install — prefer user-local over system
-    if [ -d "$HOME/.local/bin" ] && [[ ":$PATH:" == *":$HOME/.local/bin:"* ]]; then
-        INSTALL_DIR="$HOME/.local/bin"
-        cp target/release/oxscan "$INSTALL_DIR/"
-        chmod +x "$INSTALL_DIR/oxscan"
-        print_success "Installed to $INSTALL_DIR"
-    elif [ -w "/usr/local/bin" ] || sudo -n true 2>/dev/null; then
-        sudo cp target/release/oxscan /usr/local/bin/
-        sudo chmod +x /usr/local/bin/oxscan
-        print_success "Installed to /usr/local/bin"
-    else
-        print_warning "Cannot install to system PATH"
-        print_info "Binary available at: $(pwd)/target/release/oxscan"
+    # Fresh install — pick first writable directory in PATH
+    INSTALLED=false
+    for dir in "$HOME/.local/bin" "/opt/homebrew/bin" "/usr/local/bin" "$HOME/.cargo/bin"; do
+        if [ -d "$dir" ] && [[ ":$PATH:" == *":$dir:"* ]] && [ -w "$dir" ]; then
+            cp target/release/oxscan "$dir/"
+            chmod +x "$dir/oxscan"
+            print_success "Installed to $dir"
+            INSTALLED=true
+            break
+        fi
+    done
+    if ! $INSTALLED; then
+        # Fallback with sudo
+        if [ -d "/usr/local/bin" ] && sudo -n true 2>/dev/null; then
+            sudo cp target/release/oxscan /usr/local/bin/
+            sudo chmod +x /usr/local/bin/oxscan
+            print_success "Installed to /usr/local/bin (with sudo)"
+        else
+            print_warning "Cannot install to a PATH directory (try sudo or add ~/.local/bin to PATH)"
+            print_info "Binary available at: $(pwd)/target/release/oxscan"
+        fi
     fi
 fi
 
