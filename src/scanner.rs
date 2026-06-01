@@ -277,10 +277,12 @@ fn print_scan_summary(results: &ScanResults, proto: &str) {
         }
     }
 
-    if !results.filtered.is_empty() {
-        println!("\n  {}", "filtered".bright_yellow().bold());
-        for port in &results.filtered {
-            println!("    {}/{}", port.to_string().bright_yellow(), proto);
+    if results.filtered.len() <= 10 {
+        if !results.filtered.is_empty() {
+            println!("\n  {}", "filtered".bright_yellow().bold());
+            for port in &results.filtered {
+                println!("    {}/{}", port.to_string().bright_yellow(), proto);
+            }
         }
     }
 
