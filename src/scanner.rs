@@ -185,10 +185,8 @@ async fn tcp_connect_addrs(addrs: &[SocketAddr], port: u16, timeout: Duration) -
 
         match tokio::time::timeout(timeout, TcpStream::connect(&socket_addr)).await {
             Ok(Ok(_)) => return PortStatus::Open,
-            Ok(Err(e)) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
-                return PortStatus::Closed;
-            }
-            _ => continue,
+            Err(_) => continue,
+            Ok(Err(_)) => return PortStatus::Closed,
         }
     }
     PortStatus::Filtered
