@@ -1,170 +1,113 @@
 #!/bin/bash
-
-# OxideScanner Installation Script
 set -e
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
-print_success() { echo -e "${GREEN}✓${NC} $1"; }
-print_error() { echo -e "${RED}✗${NC} $1"; }
-print_info() { echo -e "${BLUE}ℹ${NC} $1"; }
-print_warning() { echo -e "${YELLOW}⚠${NC} $1"; }
-
-echo -e "${BLUE}========================================${NC}"
-echo -e "${BLUE}   OxideScanner Installation v1.0.1     ${NC}"
-echo -e "${BLUE}   Intelligent Exploit Discovery        ${NC}"
-echo -e "${BLUE}========================================${NC}"
-
-# Check if we're in the right directory
-if [ ! -f "Cargo.toml" ] || [ ! -f "src/main.rs" ]; then
-    print_error "Please run from OxideScanner repository root"
-    exit 1
-fi
-
-# Detect OS
-if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-    OS="linux"
-elif [[ "$OSTYPE" == "darwin"* ]]; then
-    OS="macos"
-else
-    print_error "Unsupported OS: $OSTYPE"
-    exit 1
-fi
-
-print_info "Detected OS: $OS"
-
-# Check if command exists
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
+ok()   { echo -e "${GREEN}✓${NC} $1"; }
+info() { echo -e "${BLUE}ℹ${NC} $1"; }
+warn() { echo -e "${YELLOW}⚠${NC} $1"; }
+fail() { echo -e "${RED}✗${NC} $1"; exit 1; }
 cmd_exists() { command -v "$1" >/dev/null 2>&1; }
 
-# Install package
+echo -e "${BLUE}━━━ OxideScanner Installer ━━━${NC}"
+
+[ -f Cargo.toml ] && [ -f src/main.rs ] || fail "Run from OxideScanner repo root"
+
+ARCH=$(uname -m)
+case "$OSTYPE" in
+  linux-gnu*)  OS=linux;;
+  darwin*)     OS=macos;;
+  *)           fail "Unsupported OS: $OSTYPE";;
+esac
+info "Detected: $OS / $ARCH"
+
+if ! cmd_exists cargo; then
+  info "Installing Rust..."
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+  . "$HOME/.cargo/env"
+  ok "Rust installed"
+else
+  ok "Rust already installed"
+fi
+
 install_pkg() {
-    local pkg=$1 cmd=$2
-    if cmd_exists "$cmd"; then
-        print_success "$pkg already installed"
-        return
-    fi
-    
-    print_info "Installing $pkg..."
-    
-    if [ "$OS" = "linux" ]; then
-        if cmd_exists apt-get; then
-            sudo apt-get update && sudo apt-get install -y "$pkg"
-        elif cmd_exists yum; then
-            sudo yum install -y "$pkg"
-        elif cmd_exists dnf; then
-            sudo dnf install -y "$pkg"
-        else
-            print_error "No supported package manager found"
-            exit 1
-        fi
-    elif [ "$OS" = "macos" ]; then
-        if cmd_exists brew; then
-            brew install "$pkg"
-        else
-            print_error "Homebrew required. Install from https://brew.sh"
-            exit 1
-        fi
-    fi
+  local pkg=$1 cmd=$2
+  cmd_exists "$cmd" && { ok "$pkg already installed"; return; }
+  info "Installing $pkg..."
+  case $OS in
+    linux)
+      for pm in apt-get dnf yum; do
+        cmd_exists $pm && { sudo $pm install -y "$pkg" 2>/dev/null; return; }
+      done
+      fail "No package manager found";;
+    macos)
+      if cmd_exists brew; then brew install "$pkg"
+      else fail "Homebrew required: https://brew.sh"; fi;;
+  esac
 }
 
-# Install Rust
-if ! cmd_exists cargo; then
-    print_info "Installing Rust..."
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-    source ~/.cargo/env
-    print_success "Rust installed"
-else
-    print_success "Rust already installed"
-fi
+install_searchsploit() {
+  [ "$OS" = linux ] && { sudo apt-get install -y exploitdb 2>/dev/null && return; }
+  [ "$OS" = macos ] && { brew install exploitdb 2>/dev/null && return; }
+  sudo git clone https://github.com/offensive-security/exploitdb.git /opt/searchsploit
+  sudo ln -sf /opt/searchsploit/searchsploit /usr/local/bin/
+}
 
-# Install dependencies
-print_info "Installing dependencies..."
-install_pkg "nmap" "nmap"
-install_pkg "Ruby" "ruby"
+install_pkg nmap nmap
+cmd_exists searchsploit && ok "searchsploit already installed" || install_searchsploit
 
-# Install searchsploit
-if ! cmd_exists searchsploit; then
-    print_info "Installing searchsploit..."
-    if [ "$OS" = "linux" ]; then
-        sudo apt-get install -y exploitdb 2>/dev/null || {
-            # Manual installation
-            sudo git clone https://github.com/offensive-security/exploitdb.git /opt/searchsploit
-            sudo ln -sf /opt/searchsploit/searchsploit /usr/local/bin/
-        }
-    elif [ "$OS" = "macos" ]; then
-        brew install exploitdb 2>/dev/null || {
-            sudo git clone https://github.com/offensive-security/exploitdb.git /opt/searchsploit
-            sudo ln -sf /opt/searchsploit/searchsploit /usr/local/bin/
-        }
-    fi
-    print_success "searchsploit installed"
-else
-    print_success "searchsploit already installed"
-fi
+pick_install_dir() {
+  cmd_exists oxscan && { echo "$(command -v oxscan)"; return; }
 
-# Build OxideScanner
-print_info "Building OxideScanner v1.0.1..."
-print_info "Features: Intelligent query filtering + Real exploit data"
+  [ "$ARCH" = arm64 ] && [ -d /opt/homebrew/bin ] && [ -w /opt/homebrew/bin ] \
+    && echo "/opt/homebrew/bin" && return
+
+  [ -d /usr/local/bin ] && [ -w /usr/local/bin ] && echo "/usr/local/bin" && return
+
+  for d in "$HOME/.local/bin" "$HOME/.cargo/bin"; do
+    [ -d "$d" ] && [[ ":$PATH:" == *":$d:"* ]] && echo "$d" && return
+  done
+
+  [[ ":$PATH:" == *":$HOME/.local/bin:"* ]] && {
+    mkdir -p "$HOME/.local/bin"
+    echo "$HOME/.local/bin"
+    return
+  }
+
+  echo ""
+}
+
+info "Building..."
 cargo build --release
-print_success "Build complete"
+ok "Build complete"
 
-# Install binary
-print_info "Installing to system..."
-if cmd_exists oxscan; then
-    # Update existing installation location
-    EXISTING=$(command -v oxscan)
-    cp target/release/oxscan "$EXISTING"
-    chmod +x "$EXISTING"
-    print_success "Updated oxscan at $EXISTING"
+DEST=$(pick_install_dir)
+if [ -n "$DEST" ]; then
+  if [[ "$DEST" == *"/usr/local/bin"* ]] && [ ! -w /usr/local/bin ]; then
+    sudo cp target/release/oxscan "$DEST"
+    sudo chmod +x "$DEST"
+  else
+    cp target/release/oxscan "$DEST"
+    chmod +x "$DEST"
+  fi
+  ok "Installed to $DEST"
 else
-    # Fresh install — pick first writable directory in PATH
-    INSTALLED=false
-    for dir in "$HOME/.local/bin" "/opt/homebrew/bin" "/usr/local/bin" "$HOME/.cargo/bin"; do
-        if [ -d "$dir" ] && [[ ":$PATH:" == *":$dir:"* ]] && [ -w "$dir" ]; then
-            cp target/release/oxscan "$dir/"
-            chmod +x "$dir/oxscan"
-            print_success "Installed to $dir"
-            INSTALLED=true
-            break
-        fi
-    done
-    if ! $INSTALLED; then
-        # Fallback with sudo
-        if [ -d "/usr/local/bin" ] && sudo -n true 2>/dev/null; then
-            sudo cp target/release/oxscan /usr/local/bin/
-            sudo chmod +x /usr/local/bin/oxscan
-            print_success "Installed to /usr/local/bin (with sudo)"
-        else
-            print_warning "Cannot install to a PATH directory (try sudo or add ~/.local/bin to PATH)"
-            print_info "Binary available at: $(pwd)/target/release/oxscan"
-        fi
-    fi
+  warn "Could not find a PATH directory (try adding ~/.local/bin to PATH)"
+  info "Binary: $(pwd)/target/release/oxscan"
+  info "  sudo cp target/release/oxscan /usr/local/bin/"
 fi
 
-# Final verification
-echo -e "\n${GREEN}Installation Summary:${NC}"
-cmd_exists nmap && print_success "nmap" || print_error "nmap"
-cmd_exists searchsploit && print_success "searchsploit" || print_warning "searchsploit"
+echo ""
+echo -e "${GREEN}━━━ Done ━━━${NC}"
+cmd_exists nmap         && ok "nmap"         || warn "nmap missing"
+cmd_exists searchsploit && ok "searchsploit" || warn "searchsploit missing"
 
 if cmd_exists oxscan; then
-    print_success "oxscan (system)"
-    echo -e "\n${GREEN}Ready to scan!${NC}"
-    echo "  oxscan scanme.nmap.org"
-    echo "  oxscan scanme.nmap.org -5k --json"
-    echo ""
-    echo "${BLUE}New in v1.0.1:${NC}"
-    echo "  ✨ Intelligent exploit search - No more false positives"
-    echo "  🎯 Only searches when specific service info is available"
-    echo "  ⚡ Real searchsploit data instead of thousands of irrelevant results"
+  ok "oxscan ready"
+  echo ""
+  echo "  oxscan scanme.nmap.org"
+  echo "  oxscan scanme.nmap.org --udp"
+  echo "  oxscan scanme.nmap.org --script vuln"
 else
-    print_success "oxscan (local)"
-    echo -e "\n${GREEN}Ready to scan!${NC}"
-    echo "  ./target/release/oxscan scanme.nmap.org"
+  echo ""
+  echo "  ./target/release/oxscan scanme.nmap.org"
 fi
-
-echo -e "\n${GREEN}Happy hacking! 🚀${NC}"
