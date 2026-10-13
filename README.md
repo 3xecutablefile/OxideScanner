@@ -2,7 +2,7 @@
 
 A rust-based scanner with built in exploit searching.
 
-[![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Version](https://img.shields.io/badge/version-1.0.1-blue.svg)]()
 
@@ -21,7 +21,7 @@ cd OxideScanner
 
 ### Basic Usage
 
-Run without flags for interactive arrow-key prompts.
+Run `oxscan <target>` for interactive prompts. For NSE, answer only **yes or no**; matching scripts are selected automatically.
 
 Common options
 
@@ -32,7 +32,8 @@ Common options
 | `--ports N` | Scan port count | `--ports 1000` |
 | `--udp` | UDP scan mode | `--udp` |
 | `--both` | TCP + UDP scan | `--both` |
-| `--script CAT` | NSE script category | `--script vuln` |
+| `--no-scripts` | Skip automatic NSE checks | `--no-scripts` |
+| `--script SELECTOR` | Optional manual override; no selection required | `--script auto` |
 | `--json` | JSON output | `--json` |
 | `--threads N` | Worker threads | `--threads 8` |
 | `--scan-timeout MS` | Connection timeout | `--scan-timeout 50` |
@@ -42,6 +43,78 @@ Command Syntax
 ```bash
 oxscan <target> [options]
 ```
+
+### Automatic NSE Checks
+
+NSE is Nmap's Lua scripting engine. OxideScanner first discovers open ports and uses Nmap service probes to identify the service, product, and version. When NSE is enabled, it runs a service-detection/script pass against the discovered TCP and UDP ports. Nmap's own host and service rules decide which checks apply, including services on nonstandard ports.
+
+- **Interactive:** one `Run automatic NSE checks?` confirmation, default **yes**. There is no category menu.
+- **Noninteractive or `--json`:** checks run automatically. Use `--no-scripts` to skip them.
+- **Automatic selection:** `safe and (default or vuln)` selects Nmap's safe-tagged default and vulnerability checks. The installed Nmap script database determines the available checks; this is not every NSE script or comprehensive vulnerability coverage.
+- **Existing overrides:** `--script <selector>` remains supported; `--script auto` uses the automatic selection. Combining `--script` with `--no-scripts` is an error.
+- **Timing:** each script has a 30-second limit; each protocol's NSE subprocess has a 60-second limit. Process failures and overall timeouts are included in the report. An individual script can time out or return no output while Nmap itself completes, so an empty result is not proof that every check passed.
+- **UDP:** the NSE pass uses Nmap's UDP scan mode, which requires appropriate OS privileges. TCP and UDP run in separate passes so a UDP failure does not discard TCP findings.
+
+Console output retains full script text. JSON includes an `nse` object with `status`, `selection`, `results`, and `error`. Status is `disabled`, `skipped_no_open_ports`, `completed`, `partial`, or `failed`; partial reports retain results from the successful protocol. Each result includes its host, scope (`port`, `host`, `pre`, or `post`), optional port/protocol, script ID, and output. Reports are emitted even when no open ports or services are found.
+
+```bash
+oxscan 127.0.0.1                         # Interactive yes/no NSE choice
+oxscan 127.0.0.1 --json                  # Automatic NSE, machine-readable findings
+oxscan 127.0.0.1 --json --no-scripts     # Skip NSE
+```
+
+NSE output provides evidence from checks; Searchsploit results are product/version matches that still need verification. Details on script selection: [Nmap NSE usage](https://nmap.org/book/nse-usage.html).
+
+### Optional HackTricks Reference Search
+
+OxideScanner can search HackTricks automatically after service detection and NSE. It returns related articles, short search snippets, and suggested follow-up checks in both terminal and JSON reports. References are guidance and do not change exploit risk scores.
+
+**This uses a Brave Search API key**, available from the [Brave Search API dashboard](https://api-dashboard.search.brave.com/). HackTricks itself does not require a search API key. Requests use Brave's Web Search endpoint and accept only HTTPS links on `hacktricks.wiki`, `book.hacktricks.wiki`, or `cloud.hacktricks.wiki`.
+
+Configure it once:
+
+```bash
+oxscan --setup-hacktricks
+```
+
+The terminal asks whether to enable references, then accepts the key through a hidden input. Enter a blank key or answer no to keep the feature disabled. Ordinary interactive scans also offer this setup once if no previous choice exists. The choice is remembered; subsequent scans reuse the saved key without prompting. API authentication is checked when a search request is made, not during setup.
+
+- **No configured key:** no reference searches or guidance are activated. JSON records `hacktricks.status` as `disabled`.
+- **JSON/noninteractive runs:** never prompt for a key. Use a saved credential or `OXIDE_HACKTRICKS_API_KEY`.
+- **Linux/macOS storage:** `$XDG_CONFIG_HOME/oxidescanner/hacktricks.json` when XDG_CONFIG_HOME is absolute, otherwise `$HOME/.config/oxidescanner/hacktricks.json`. The key is stored as plaintext in an owner-only file (`0600`) inside a private directory (`0700`), using atomic replacement. Unsafe links, permissions, and permissive macOS ACLs are rejected. Credentials stay outside scan configuration and reports.
+- **Environment override:** `OXIDE_HACKTRICKS_API_KEY` takes precedence and is never persisted. Setting it to an empty value disables references for that invocation, even if a key was saved.
+- **Reset:** `oxscan --reset-hacktricks` removes the stored key and remembers opt-out. It can recover a safely owned settings file with corrupt JSON. An environment override still takes precedence.
+- **Setup/reset require no target, Nmap, or Searchsploit.** Setup needs an interactive terminal; do not combine these commands with scan flags.
+
+```bash
+oxscan 127.0.0.1 --json                        # Uses the configured key, if any
+OXIDE_HACKTRICKS_API_KEY= oxscan 127.0.0.1 --json # Disable references for this run
+oxscan --reset-hacktricks                      # Remove the saved key
+```
+
+#### Matching And Request Limits
+
+The service map covers HTTP(S), SSH, FTP, DNS, SMB, LDAP, MySQL, PostgreSQL, SQL Server, Redis, MongoDB, RDP, SNMP, SMTP, IMAP, POP3, NFS, VNC, MQTT, and AMQP. It matches service names rather than assuming a port identifies its protocol, so recognized services on nonstandard ports work too.
+
+Recognized product names can refine a query. Explicit NSE observations about SMB signing, anonymous FTP, DNS recursion, and legacy TLS protocols receive priority. Negative/error output does not become a positive observation. Finding-specific guidance inspects at most 64 KiB per NSE result; the original NSE output remains available in the report.
+
+Outbound queries contain canonical service/product names and fixed observation terms. Target IPs, hostnames, raw banners, raw NSE output, and version strings are not sent to Brave. Duplicate queries share a request while retaining all associated host/port/protocol contexts. An empty product-specific search can fall back to its general service query.
+
+Each scan allows at most **8 requests**, including fallbacks; **3 accepted links per query**; **10 seconds per request**; and **30 seconds for the search stage**. Requests are spaced at least 1.05 seconds apart. Responses are limited to 1 MiB, redirects are rejected, and operator proxy environment settings are honored. Invalid credentials, exhausted quota, and network failures leave scan results intact.
+
+Search results are reused within a run, not cached to disk. Persistent storage of Brave results requires a [plan granting storage rights](https://brave.com/search/api/). This implementation uses native Rust HTTPS: **no Docker, browser, Node.js, or local HackTricks installation**.
+
+#### JSON Reference Reports
+
+The report includes the requested `target` and a separate `hacktricks` object:
+
+- `status`: `disabled`, `skipped_no_context`, `completed`, `no_results`, `partial`, `unavailable`, or `budget_exhausted`.
+- `provider`, `checked_at`, `requests`, `skipped_queries`, and sanitized `errors`.
+- `lookups`: query, source contexts, suggested `next_steps`, links/snippets, and per-query `status`/`error`. Per-query status distinguishes `completed`, `no_results`, `failed`, and `skipped`.
+
+Dates indicate when a lookup was made, not when an article was published. Follow-up suggestions are authored by OxideScanner; returned article titles and snippets come from search results. Source material remains attributable through its article URL.
+
+Implementation references: [HackTricks search source](https://github.com/HackTricks-wiki/hacktricks/blob/master/theme/ht_searcher.js), [HackTricks attribution guidance](https://hacktricks.wiki/en/welcome/hacktricks-values-and-faq.html), [Brave Web Search API](https://api-dashboard.search.brave.com/api-reference/web/search/get), and [Brave rate limits](https://api-dashboard.search.brave.com/documentation/guides/rate-limiting).
 
 Configuration
 ```bash
@@ -73,6 +146,16 @@ cd OxideScanner
 cargo build --release
 sudo cp target/release/oxscan /usr/local/bin/
 ```
+
+### Development Checks
+
+```bash
+cargo test --locked --all-targets -- --test-threads=1
+cargo build --release --locked
+python3 tests/cli_smoke.py
+```
+
+The unit tests include loopback HTTP fixtures, credential persistence checks, and NSE/XML regression cases. They do not need a Brave key, Nmap, or Searchsploit. The optional Python 3 smoke check exercises the release CLI and hidden prompts on Linux/macOS, using temporary settings and dummy external tools; its native probe touches only loopback TCP port 1. Environment-reading tests run serially because some older tests modify process-wide environment variables. `Cargo.lock` is tracked for reproducible dependency resolution. The release build and checks were verified with Rust 1.97.1 on macOS; use a current stable toolchain.
 
 
 

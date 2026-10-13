@@ -35,6 +35,10 @@ chrono = { version = "0.4", features = ["serde"] }
 rand = "0.8"
 atty = "0.2"
 inquire = "0.7"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tokio-test = "0.4"

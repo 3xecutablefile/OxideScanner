@@ -61,7 +61,7 @@ impl BaseTool {
         use tokio::time::timeout as tokio_timeout;
 
         let mut cmd = Command::new(&self.binary_path);
-        cmd.args(args);
+        cmd.args(args).kill_on_drop(true);
 
         let output = tokio_timeout(timeout_duration, cmd.output())
             .await

@@ -3,6 +3,8 @@ pub mod constants;
 pub mod error;
 pub mod exploit;
 pub mod external;
+pub mod hacktricks;
+pub mod hacktricks_settings;
 pub mod logging;
 pub mod metrics;
 pub mod rate_limit;

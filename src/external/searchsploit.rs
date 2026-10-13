@@ -80,7 +80,7 @@ impl ExploitSearcher {
         let mut exploits = Vec::new();
 
         for exploit_data in response.results_exploit {
-            let cvss_score = self.extract_cvss(&exploit_data.title);
+            let cvss_score = Self::extract_cvss(&exploit_data.title);
             let url = format!("https://www.exploit-db.com/exploits/{}", exploit_data.edb_id);
 
             let exploit = Exploit {
@@ -100,11 +100,11 @@ impl ExploitSearcher {
         let mut exploits = Vec::new();
 
         for line in text.lines() {
-            if self.should_skip_line(line) {
+            if Self::should_skip_line(line) {
                 continue;
             }
 
-            if let Some(exploit) = self.parse_exploit_line(line)? {
+            if let Some(exploit) = Self::parse_exploit_line(line)? {
                 exploits.push(exploit);
             }
         }
@@ -112,7 +112,7 @@ impl ExploitSearcher {
         Ok(exploits)
     }
 
-    fn should_skip_line(&self, line: &str) -> bool {
+    fn should_skip_line(line: &str) -> bool {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
             return true;
@@ -124,7 +124,7 @@ impl ExploitSearcher {
         false
     }
 
-    fn parse_exploit_line(&self, line: &str) -> Result<Option<Exploit>> {
+    fn parse_exploit_line(line: &str) -> Result<Option<Exploit>> {
         let parts: Vec<&str> = line.split('|').collect();
         
         if parts.len() < 2 {
@@ -138,7 +138,7 @@ impl ExploitSearcher {
             return Ok(None);
         }
 
-        let cvss_score = self.extract_cvss(title);
+        let cvss_score = Self::extract_cvss(title);
         let url = format!("https://www.exploit-db.com/exploit {}", path);
 
         Ok(Some(Exploit {
@@ -149,7 +149,7 @@ impl ExploitSearcher {
         }))
     }
 
-    fn extract_cvss(&self, title: &str) -> Option<f32> {
+    fn extract_cvss(title: &str) -> Option<f32> {
         let cvss_pattern = regex::Regex::new(r"(?i)cvss[:\s]*(\d+\.?\d*)").ok()?;
         cvss_pattern.captures(title)
             .and_then(|caps| caps.get(1))
@@ -173,30 +173,24 @@ mod tests {
 
     #[test]
     fn test_extract_cvss() {
-        let searcher = ExploitSearcher::new().unwrap();
-
-        assert_eq!(searcher.extract_cvss("Remote Code Execution"), None);
-        assert_eq!(searcher.extract_cvss("SQL Injection"), None);
-        assert_eq!(searcher.extract_cvss("Some random exploit"), None);
+        assert_eq!(ExploitSearcher::extract_cvss("Remote Code Execution"), None);
+        assert_eq!(ExploitSearcher::extract_cvss("SQL Injection"), None);
+        assert_eq!(ExploitSearcher::extract_cvss("Some random exploit"), None);
     }
 
     #[test]
     fn test_should_skip_line() {
-        let searcher = ExploitSearcher::new().unwrap();
-
-        assert!(searcher.should_skip_line("----"));
-        assert!(!searcher.should_skip_line("Exploit Title | Path"));
-        assert!(searcher.should_skip_line(""));
-        assert!(searcher.should_skip_line("  # Comment"));
-        assert!(!searcher.should_skip_line("Some exploit title | /path/to/exploit"));
+        assert!(ExploitSearcher::should_skip_line("----"));
+        assert!(!ExploitSearcher::should_skip_line("Exploit Title | Path"));
+        assert!(ExploitSearcher::should_skip_line(""));
+        assert!(ExploitSearcher::should_skip_line("  # Comment"));
+        assert!(!ExploitSearcher::should_skip_line("Some exploit title | /path/to/exploit"));
     }
 
     #[test]
     fn test_parse_exploit_line() {
-        let searcher = ExploitSearcher::new().unwrap();
-
         let line = "Test Exploit | /path/to/exploit.txt | Description";
-        let result = searcher.parse_exploit_line(line).unwrap().unwrap();
+        let result = ExploitSearcher::parse_exploit_line(line).unwrap().unwrap();
 
         assert_eq!(result.title, "Test Exploit");
         assert_eq!(result.path, "/path/to/exploit.txt");

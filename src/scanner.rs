@@ -559,27 +559,30 @@ async fn udp_connect_addrs(addrs: &[SocketAddr], port: u16, timeout: Duration) -
 pub async fn run_nse_scripts(
     target: &str,
     ports: &[Port],
-    script_category: &str,
+    script_selection: &str,
     _config: &Config,
-) -> Vec<NseResult> {
-    let runner = match NseRunner::new() {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("{} NSE runner init failed: {}", "WARNING".yellow(), e);
-            return Vec::new();
-        }
-    };
-
-    let port_numbers: Vec<u16> = ports.iter().map(|p| p.port).collect();
-    let timeout = Duration::from_secs(constants::NMAP_TIMEOUT_SECS * 2);
-
-    match runner.run_scripts(target, &port_numbers, script_category, timeout).await {
-        Ok(results) => results,
-        Err(e) => {
-            eprintln!("{} NSE execution failed: {}", "WARNING".yellow(), e);
-            Vec::new()
+) -> Result<Vec<NseResult>> {
+    if ports.is_empty() {
+        return Ok(Vec::new());
+    }
+    let runner = NseRunner::new()?;
+    let mut tcp_ports = Vec::new();
+    let mut udp_ports = Vec::new();
+    for port in ports {
+        match port.protocol.as_str() {
+            "tcp" => tcp_ports.push(port.port),
+            "udp" => udp_ports.push(port.port),
+            protocol => {
+                return Err(OxideScannerError::validation(format!(
+                    "Unsupported NSE port protocol: {}", protocol
+                )));
+            }
         }
     }
+    let timeout = Duration::from_secs(constants::NMAP_TIMEOUT_SECS * 2);
+    runner
+        .run_scripts(target, &tcp_ports, &udp_ports, script_selection, timeout)
+        .await
 }
 
 pub fn print_nse_results(results: &[NseResult]) {
@@ -589,12 +592,16 @@ pub fn print_nse_results(results: &[NseResult]) {
 
     println!("  {}", "nse".bright_yellow().bold());
     for result in results {
+        let location = match (result.port, result.protocol.as_deref()) {
+            (Some(port), Some(protocol)) => format!("{}/{}", port, protocol),
+            _ => result.host.clone().unwrap_or_else(|| result.scope.clone()),
+        };
         println!(
-            "    {}/tcp  {}",
-            result.port.to_string().bright_cyan(),
+            "    {}  {}",
+            location.bright_cyan(),
             result.script_id.bright_white()
         );
-        for line in result.output.lines().take(5) {
+        for line in result.output.lines() {
             println!("      {}", line.dimmed());
         }
     }

@@ -43,10 +43,10 @@ impl NmapDetector {
         let timeout = timeout.unwrap_or(Duration::from_secs(constants::NMAP_TIMEOUT_SECS));
 
         let validated_target = validation::validate_target(target)?;
-        let port_list = self.format_port_list(ports)?;
+        let port_list = Self::format_port_list(ports)?;
         let validated_port_list = validation::validate_port_list(&port_list)?;
 
-        let args = self.build_nmap_args(&validated_target, &validated_port_list, is_udp);
+        let args = Self::build_nmap_args(&validated_target, &validated_port_list, is_udp);
         let args_str: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
         let output = self.execute_with_timeout(&args_str, timeout).await?;
@@ -54,7 +54,7 @@ impl NmapDetector {
         self.parse_nmap_output(&output)
     }
 
-    fn format_port_list(&self, ports: &[u16]) -> Result<String> {
+    fn format_port_list(ports: &[u16]) -> Result<String> {
         if ports.is_empty() {
             return Err(OxideScannerError::validation("Port list cannot be empty"));
         }
@@ -64,7 +64,7 @@ impl NmapDetector {
         Ok(port_strings.join(","))
     }
 
-    fn build_nmap_args(&self, target: &str, port_list: &str, is_udp: bool) -> Vec<String> {
+    fn build_nmap_args(target: &str, port_list: &str, is_udp: bool) -> Vec<String> {
         let mut args = Vec::new();
 
         if is_udp {
@@ -247,32 +247,28 @@ mod tests {
 
     #[test]
     fn test_format_port_list() {
-        let detector = NmapDetector::new().unwrap();
         let ports = vec![22, 80, 443];
-        let result = detector.format_port_list(&ports).unwrap();
+        let result = NmapDetector::format_port_list(&ports).unwrap();
         assert_eq!(result, "22,80,443");
     }
 
     #[test]
     fn test_format_empty_port_list() {
-        let detector = NmapDetector::new().unwrap();
         let ports = vec![];
-        let result = detector.format_port_list(&ports);
+        let result = NmapDetector::format_port_list(&ports);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_build_nmap_args_tcp() {
-        let detector = NmapDetector::new().unwrap();
-        let args = detector.build_nmap_args("127.0.0.1", "80,443", false);
+        let args = NmapDetector::build_nmap_args("127.0.0.1", "80,443", false);
         assert!(args.contains(&"-sV".to_string()));
         assert!(!args.contains(&"-sUV".to_string()));
     }
 
     #[test]
     fn test_build_nmap_args_udp() {
-        let detector = NmapDetector::new().unwrap();
-        let args = detector.build_nmap_args("127.0.0.1", "53,161", true);
+        let args = NmapDetector::build_nmap_args("127.0.0.1", "53,161", true);
         assert!(args.contains(&"-sUV".to_string()));
         assert!(!args.contains(&"-sV".to_string()));
     }

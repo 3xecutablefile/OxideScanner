@@ -8,6 +8,8 @@ pub const NMAP_TIMEOUT_SECS: u64 = 30;
 
 pub const NMAP_VERSION_INTENSITY: u8 = 1;
 
+pub const DEFAULT_NSE_SCRIPTS: &str = "safe and (default or vuln)";
+
 pub const PROGRESS_UPDATE_INTERVAL_MS: u64 = 100;
 
 pub const MAX_DISPLAYED_EXPLOITS: usize = 10;

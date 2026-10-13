@@ -55,6 +55,7 @@ impl Config {
         }
 
         let target = validation::validate_target(&args[1])?;
+        let mut nse_script = Self::parse_nse_script(args)?;
         let json_mode = args.contains(&"--json".to_string());
         let has_any_flags = args.len() > 2;
         let interactive = std::io::stdin().is_terminal() && !json_mode;
@@ -90,13 +91,17 @@ impl Config {
             constants::DEFAULT_EXPLOIT_TIMEOUT_SECS * 1000,
         )?;
 
-        let nse_script = if let Some(script) = Self::parse_string_arg(args, "--script") {
-            Some(script)
-        } else if !has_any_flags && interactive {
-            Self::prompt_nse_script()?
-        } else {
-            None
-        };
+        if interactive
+            && !args.iter().skip(2).any(|arg| arg == "--script" || arg == "--no-scripts")
+        {
+            let run_nse = Confirm::new("Run automatic NSE checks?")
+                .with_default(true)
+                .prompt()
+                .map_err(|e| OxideScannerError::config(format!("NSE prompt failed: {}", e)))?;
+            if !run_nse {
+                nse_script = None;
+            }
+        }
 
         let env_config = Self::from_env()?;
 
@@ -143,51 +148,6 @@ impl Config {
             "UDP" => Ok(ScanMode::Udp),
             "TCP + UDP" => Ok(ScanMode::Both),
             _ => Ok(ScanMode::Tcp),
-        }
-    }
-
-    fn prompt_nse_script() -> Result<Option<String>> {
-        let yes = Confirm::new("Run NSE scripts?")
-            .with_default(false)
-            .prompt()
-            .map_err(|e| OxideScannerError::config(format!("NSE prompt failed: {}", e)))?;
-        if !yes {
-            return Ok(None);
-        }
-
-        let categories = vec![
-            "vuln        Check for specific known vulnerabilities",
-            "safe        Not designed to crash services or exploit holes",
-            "default     Default set (-sC) — speed, usefulness, reliability",
-            "discovery   Query registries, SNMP, directory services, etc.",
-            "exploit     Actively exploit a vulnerability",
-            "auth        Authentication credentials (or bypassing them)",
-            "brute       Brute-force to guess authentication credentials",
-            "intrusive   May crash target, use significant resources",
-            "dos         May cause a denial of service",
-            "broadcast   Discover hosts by broadcasting on local network",
-            "external    May send data to third-party services",
-            "fuzzer      Send unexpected/randomized fields in packets",
-            "malware     Test if target is infected by malware/backdoors",
-            "info        General information gathering",
-            "version     Version detection extension (auto, not selectable)",
-            "Custom      Type your own",
-        ];
-
-        let selection = Select::new("Select NSE script category", categories)
-            .with_starting_cursor(0)
-            .prompt()
-            .map_err(|e| OxideScannerError::config(format!("NSE prompt failed: {}", e)))?;
-
-        if selection == "Custom      (Type your own)" {
-            let custom = Text::new("Enter NSE category/filter:")
-                .with_help_message("Examples: http-*, ssh-auth-methods, or a custom glob")
-                .prompt()
-                .map_err(|e| OxideScannerError::config(format!("NSE prompt failed: {}", e)))?;
-            Ok(Some(custom))
-        } else {
-            let cat = selection.split_whitespace().next().unwrap_or("vuln").to_string();
-            Ok(Some(cat))
         }
     }
 
@@ -316,18 +276,36 @@ impl Config {
         }
     }
 
-    fn parse_string_arg(args: &[String], flag: &str) -> Option<String> {
-        for (i, arg) in args.iter().enumerate() {
-            if arg == flag {
-                if i + 1 < args.len() {
-                    let val = args[i + 1].trim().to_string();
-                    if !val.is_empty() && !val.starts_with('-') {
-                        return Some(val);
-                    }
+    fn parse_nse_script(args: &[String]) -> Result<Option<String>> {
+        let no_scripts = args.iter().skip(2).any(|arg| arg == "--no-scripts");
+        let mut script = constants::DEFAULT_NSE_SCRIPTS;
+        for (i, arg) in args.iter().enumerate().skip(2) {
+            if arg == "--script" {
+                if no_scripts {
+                    return Err(OxideScannerError::config(
+                        "--script and --no-scripts cannot be used together",
+                    ));
                 }
+                let value = args.get(i + 1).map(|value| value.trim()).ok_or_else(|| {
+                    OxideScannerError::config("Missing NSE selector for --script")
+                })?;
+                if value.is_empty() || value.starts_with('-') {
+                    return Err(OxideScannerError::config(
+                        "--script requires a nonempty NSE selector, not another flag",
+                    ));
+                }
+                script = if value == "auto" {
+                    constants::DEFAULT_NSE_SCRIPTS
+                } else {
+                    value
+                };
             }
         }
-        None
+        Ok(if no_scripts {
+            None
+        } else {
+            Some(script.to_string())
+        })
     }
 
     fn parse_thread_arg(args: &[String], default: usize) -> Result<usize> {
@@ -425,7 +403,7 @@ impl Config {
             logging,
             metrics,
             retry,
-            nse_script: None,
+            nse_script: Some(constants::DEFAULT_NSE_SCRIPTS.to_string()),
         })
     }
 }
@@ -447,6 +425,69 @@ mod tests {
         assert_eq!(config.target, "127.0.0.1");
         assert!(config.json_mode);
         assert_eq!(config.port_limit, 5000);
+        assert_eq!(config.nse_script.as_deref(), Some(constants::DEFAULT_NSE_SCRIPTS));
+    }
+
+    #[test]
+    fn test_config_nse_defaults() {
+        let args = vec!["oxidescanner".to_string(), "127.0.0.1".to_string()];
+        assert_eq!(
+            Config::parse_nse_script(&args).unwrap().as_deref(),
+            Some(constants::DEFAULT_NSE_SCRIPTS)
+        );
+        assert_eq!(
+            Config::from_env().unwrap().nse_script.as_deref(),
+            Some(constants::DEFAULT_NSE_SCRIPTS)
+        );
+    }
+
+    #[test]
+    fn test_config_nse_flags() {
+        let default = Some(constants::DEFAULT_NSE_SCRIPTS);
+        let cases: &[(&[&str], Option<&str>)] = &[
+            (&[], default),
+            (&["--udp"], default),
+            (&["--both"], default),
+            (&["--script", "http-*"], Some("http-*")),
+            (&["--script", "  safe and default  "], Some("safe and default")),
+            (&["--script", "auto"], default),
+            (&["--no-scripts"], None),
+        ];
+        for (flags, expected) in cases {
+            let args: Vec<String> = ["oxidescanner", "127.0.0.1", "--json"]
+                .iter()
+                .chain(flags.iter())
+                .map(|arg| arg.to_string())
+                .collect();
+            let config = Config::from_args(&args).unwrap();
+            assert_eq!(config.nse_script.as_deref(), *expected, "{flags:?}");
+        }
+    }
+
+    #[test]
+    fn test_config_invalid_nse_flags() {
+        let cases: &[&[&str]] = &[
+            &["--script"],
+            &["--script", ""],
+            &["--script", "   "],
+            &["--script", "--udp"],
+            &["--script", "-5k"],
+            &["--script", "--script", "safe"],
+            &["--script", "safe", "--script"],
+            &["--script", "safe", "--script", ""],
+            &["--script", "safe", "--no-scripts"],
+            &["--no-scripts", "--script", "auto"],
+            &["--script", "--no-scripts"],
+        ];
+        for flags in cases {
+            let args: Vec<String> = ["oxidescanner", "127.0.0.1", "--json"]
+                .iter()
+                .chain(flags.iter())
+                .map(|arg| arg.to_string())
+                .collect();
+            let error = Config::from_args(&args).unwrap_err();
+            assert!(error.to_string().contains("--script"), "{flags:?}: {error}");
+        }
     }
 
     #[test]
@@ -459,6 +500,7 @@ mod tests {
             "50".to_string(),
             "--exploit-timeout".to_string(),
             "15000".to_string(),
+            "--json".to_string(),
         ];
 
         let config = Config::from_args(&args).unwrap();
