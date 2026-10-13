@@ -14,7 +14,7 @@ A rust-based scanner with built in exploit searching.
 
 ### Installation
 ```bash
-git clone https://github.com/NotSmartMan/OxideScanner.git
+git clone https://github.com/3xecutablefile/OxideScanner.git
 cd OxideScanner
 ./install.sh
 ```
